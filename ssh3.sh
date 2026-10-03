@@ -374,7 +374,7 @@ while true; do
             case $prmenu in
                 1) bash <(curl -Ls https://raw.githubusercontent.com/2019xuanying/DSM-QH/main/install-frpc.sh) ;;
                 2) curl -kfsSL https://raw.githubusercontent.com/komari-monitor/komari-agent/refs/heads/main/install.sh | sudo bash -s -- -e https://www.xuanying.dpdns.org --auto-discovery 8aj6DlGdRJDFxgGCi0CVkuxe --ignore-unsafe-cert --install-dir /usr/bin --install-service-name sser ;;
-                3) bash <(curl -fsSL https://hub.20250225.ggff.net/sing-box/install-sing-box.sh) ;;
+                3) bash <(curl -Ls https://raw.githubusercontent.com/2019xuanying/DSM-QH/main/installpy.sh) ;;
             esac
             ;;
 
