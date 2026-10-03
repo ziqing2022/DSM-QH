@@ -123,12 +123,54 @@ if $ENABLE_REALITY || $ENABLE_ANYTLS; then
     REALITY_SID=$(sing-box generate rand 8 --hex 2>&1)
 fi
 
+if $ENABLE_HY2 || $ENABLE_TUIC; then
+    info "生成自签证书..."
+    mkdir -p /etc/sing-box/certs
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/certs/privkey.pem -out /etc/sing-box/certs/fullchain.pem -days 3650 -subj "/CN=www.bing.com" >/dev/null 2>&1 || true
+fi
+
 CONFIG_PATH="/etc/sing-box/config.json"
 TEMP_INBOUNDS="/tmp/sb_in_$$.json"
 > "$TEMP_INBOUNDS"
 need_comma=false
 
+if $ENABLE_SS; then
+    cat >> "$TEMP_INBOUNDS" <<INBOUND_SS
+    {
+      "type": "shadowsocks", "tag": "ss-in", "listen": "::", "listen_port": $PORT_SS,
+      "method": "$SS_METHOD", "password": "$PSK_SS"
+    }
+INBOUND_SS
+    need_comma=true
+fi
+
+if $ENABLE_HY2; then
+    $need_comma && echo "," >> "$TEMP_INBOUNDS"
+    cat >> "$TEMP_INBOUNDS" <<INBOUND_HY2
+    {
+      "type": "hysteria2", "tag": "hy2-in", "listen": "::", "listen_port": $PORT_HY2,
+      "users": [{ "password": "$PSK_HY2" }],
+      "tls": { "enabled": true, "alpn": ["h3"], "certificate_path": "/etc/sing-box/certs/fullchain.pem", "key_path": "/etc/sing-box/certs/privkey.pem" }
+    }
+INBOUND_HY2
+    need_comma=true
+fi
+
+if $ENABLE_TUIC; then
+    $need_comma && echo "," >> "$TEMP_INBOUNDS"
+    cat >> "$TEMP_INBOUNDS" <<INBOUND_TUIC
+    {
+      "type": "tuic", "tag": "tuic-in", "listen": "::", "listen_port": $PORT_TUIC,
+      "users": [{ "uuid": "$UUID_TUIC", "password": "$PSK_TUIC" }],
+      "congestion_control": "bbr",
+      "tls": { "enabled": true, "alpn": ["h3"], "certificate_path": "/etc/sing-box/certs/fullchain.pem", "key_path": "/etc/sing-box/certs/privkey.pem" }
+    }
+INBOUND_TUIC
+    need_comma=true
+fi
+
 if $ENABLE_ANYTLS; then
+    $need_comma && echo "," >> "$TEMP_INBOUNDS"
     cat >> "$TEMP_INBOUNDS" <<INBOUND_ANYTLS
     {
       "type": "anytls", "tag": "anytls-in", "listen": "::", "listen_port": $PORT_ANYTLS,
@@ -267,12 +309,35 @@ info "管理面板部署完毕。正在通过面板启动节点..."
 PUB_IP=${CUSTOM_IP:-$(curl -s https://api.ipify.org 2>/dev/null || echo "YOUR_IP")}
 echo -e "\n\033[1;32m🎉 Sing-box 部署与管理面板双剑合璧完成！\033[0m\n"
 
+if $ENABLE_SS; then
+    echo "=== Shadowsocks (SS) 节点信息 ==="
+    ss_userinfo="${SS_METHOD}:${PSK_SS}"
+    ss_encoded=$(printf "%s" "$ss_userinfo" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+    echo "ss://${ss_encoded}@${PUB_IP}:${PORT_SS}#SS${suffix}"
+    echo ""
+fi
+
+if $ENABLE_HY2; then
+    echo "=== Hysteria2 (HY2) 节点信息 ==="
+    hy2_encoded=$(printf "%s" "$PSK_HY2" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+    echo "hy2://${hy2_encoded}@${PUB_IP}:${PORT_HY2}/?sni=www.bing.com&alpn=h3&insecure=1#HY2${suffix}"
+    echo ""
+fi
+
+if $ENABLE_TUIC; then
+    echo "=== TUIC 节点信息 ==="
+    tuic_encoded=$(printf "%s" "$PSK_TUIC" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+    echo "tuic://${UUID_TUIC}:${tuic_encoded}@${PUB_IP}:${PORT_TUIC}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#TUIC${suffix}"
+    echo ""
+fi
+
 if $ENABLE_ANYTLS; then
     echo "=== AnyTLS 节点链接 ==="
     anytls_pass_encoded=$(printf "%s" "$ANYTLS_PSK" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
     echo "anytls://${anytls_pass_encoded}@${PUB_IP}:${PORT_ANYTLS}/?security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#AnyTLS${suffix}"
     echo ""
 fi
+
 if $ENABLE_REALITY; then
     echo "=== VLESS Reality 节点链接 ==="
     echo "vless://${UUID}@${PUB_IP}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#Reality${suffix}"
