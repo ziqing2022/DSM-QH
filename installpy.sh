@@ -67,6 +67,7 @@ if $ENABLE_SS; then SS_METHOD="2022-blake3-aes-128-gcm"; fi
 echo "请输入节点连接 IP 或 DDNS域名(留空默认取本机出口IP):"
 read -r CUSTOM_IP
 CUSTOM_IP="$(echo "$CUSTOM_IP" | tr -d '[:space:]')"
+PUB_IP=${CUSTOM_IP:-$(curl -s https://api.ipify.org 2>/dev/null || echo "YOUR_IP")}
 
 REALITY_SNI="addons.mozilla.org"
 if $ENABLE_REALITY || $ENABLE_ANYTLS; then
@@ -128,6 +129,28 @@ if $ENABLE_HY2 || $ENABLE_TUIC; then
     mkdir -p /etc/sing-box/certs
     openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/certs/privkey.pem -out /etc/sing-box/certs/fullchain.pem -days 3650 -subj "/CN=www.bing.com" >/dev/null 2>&1 || true
 fi
+
+# 保存变量到环境文件，供 sb 动态读取
+cat > /etc/sing-box/node_env <<ENV_EOF
+PUB_IP="${PUB_IP}"
+REALITY_SNI="${REALITY_SNI:-}"
+REALITY_PUB="${REALITY_PUB:-}"
+REALITY_SID="${REALITY_SID:-}"
+SS_METHOD="${SS_METHOD:-}"
+SS_PSK="${PSK_SS:-}"
+HY2_PSK="${PSK_HY2:-}"
+TUIC_UUID="${UUID_TUIC:-}"
+TUIC_PSK="${PSK_TUIC:-}"
+ANYTLS_USER="${ANYTLS_USER:-}"
+ANYTLS_PSK="${ANYTLS_PSK:-}"
+UUID="${UUID:-}"
+SUFFIX="${suffix:-}"
+ENABLE_SS=${ENABLE_SS}
+ENABLE_HY2=${ENABLE_HY2}
+ENABLE_TUIC=${ENABLE_TUIC}
+ENABLE_ANYTLS=${ENABLE_ANYTLS}
+ENABLE_REALITY=${ENABLE_REALITY}
+ENV_EOF
 
 CONFIG_PATH="/etc/sing-box/config.json"
 TEMP_INBOUNDS="/tmp/sb_in_$$.json"
@@ -223,13 +246,14 @@ menu() {
     echo "  3. 重启节点"
     echo "  4. 修改节点端口"
     echo "  5. 查看运行状态与当前端口"
-    echo -e "\033[1;31m  6. 彻底卸载节点与面板\033[0m"
+    echo -e "\033[1;35m  6. 查看当前节点分享链接\033[0m"
+    echo -e "\033[1;31m  7. 彻底卸载节点与面板\033[0m"
     echo "  0. 退出面板"
     echo -e "\033[1;36m==================================\033[0m"
-    read -p "请输入选项 [0-6]: " opt
+    read -p "请输入选项 [0-7]: " opt
     case $opt in
         1) start_sb ;; 2) stop_sb ;; 3) stop_sb "no_menu"; sleep 1; start_sb ;;
-        4) change_port ;; 5) show_status ;; 6) uninstall_sb ;; 0) exit 0 ;;
+        4) change_port ;; 5) show_status ;; 6) show_links ;; 7) uninstall_sb ;; 0) exit 0 ;;
         *) echo "无效选项"; sleep 1; menu ;;
     esac
 }
@@ -280,6 +304,62 @@ show_status() {
     menu
 }
 
+show_links() {
+    clear
+    echo -e "\033[1;36m==================================\033[0m"
+    echo -e "\033[1;32m   当前节点分享链接\033[0m"
+    echo -e "\033[1;36m==================================\033[0m"
+    if [ ! -f "/etc/sing-box/node_env" ]; then
+        echo -e "\033[1;31m[ERR] 找不到节点参数缓存，无法生成链接。\033[0m"
+    else
+        source /etc/sing-box/node_env
+        
+        # 动态提取最新端口
+        PORT_SS=$(grep -A 5 '"type": "shadowsocks"' $CONFIG 2>/dev/null | grep '"listen_port"' | grep -oE '[0-9]+' | head -1 || true)
+        PORT_HY2=$(grep -A 5 '"type": "hysteria2"' $CONFIG 2>/dev/null | grep '"listen_port"' | grep -oE '[0-9]+' | head -1 || true)
+        PORT_TUIC=$(grep -A 5 '"type": "tuic"' $CONFIG 2>/dev/null | grep '"listen_port"' | grep -oE '[0-9]+' | head -1 || true)
+        PORT_ANYTLS=$(grep -A 5 '"type": "anytls"' $CONFIG 2>/dev/null | grep '"listen_port"' | grep -oE '[0-9]+' | head -1 || true)
+        PORT_REALITY=$(grep -A 5 '"type": "vless"' $CONFIG 2>/dev/null | grep '"listen_port"' | grep -oE '[0-9]+' | head -1 || true)
+
+        if [ "$ENABLE_SS" = "true" ] && [ -n "$PORT_SS" ]; then
+            echo -e "\033[1;33m=== Shadowsocks (SS) 节点 ===\033[0m"
+            ss_userinfo="${SS_METHOD}:${SS_PSK}"
+            ss_encoded=$(printf "%s" "$ss_userinfo" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+            echo "ss://${ss_encoded}@${PUB_IP}:${PORT_SS}#SS${SUFFIX}"
+            echo ""
+        fi
+
+        if [ "$ENABLE_HY2" = "true" ] && [ -n "$PORT_HY2" ]; then
+            echo -e "\033[1;33m=== Hysteria2 (HY2) 节点 ===\033[0m"
+            hy2_encoded=$(printf "%s" "$HY2_PSK" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+            echo "hy2://${hy2_encoded}@${PUB_IP}:${PORT_HY2}/?sni=www.bing.com&alpn=h3&insecure=1#HY2${SUFFIX}"
+            echo ""
+        fi
+
+        if [ "$ENABLE_TUIC" = "true" ] && [ -n "$PORT_TUIC" ]; then
+            echo -e "\033[1;33m=== TUIC 节点 ===\033[0m"
+            tuic_encoded=$(printf "%s" "$TUIC_PSK" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+            echo "tuic://${TUIC_UUID}:${tuic_encoded}@${PUB_IP}:${PORT_TUIC}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#TUIC${SUFFIX}"
+            echo ""
+        fi
+
+        if [ "$ENABLE_ANYTLS" = "true" ] && [ -n "$PORT_ANYTLS" ]; then
+            echo -e "\033[1;33m=== AnyTLS 节点 ===\033[0m"
+            anytls_pass_encoded=$(printf "%s" "$ANYTLS_PSK" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+            echo "anytls://${anytls_pass_encoded}@${PUB_IP}:${PORT_ANYTLS}/?security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#AnyTLS${SUFFIX}"
+            echo ""
+        fi
+
+        if [ "$ENABLE_REALITY" = "true" ] && [ -n "$PORT_REALITY" ]; then
+            echo -e "\033[1;33m=== VLESS Reality 节点 ===\033[0m"
+            echo "vless://${UUID}@${PUB_IP}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#Reality${SUFFIX}"
+            echo ""
+        fi
+    fi
+    read -p "按回车键返回菜单..."
+    menu
+}
+
 uninstall_sb() {
     read -p "⚠️ 确定要彻底卸载并清除节点数据吗？(y/N): " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
@@ -295,6 +375,7 @@ uninstall_sb() {
 # 命令行参数解析
 if [ "${1:-}" == "start" ]; then start_sb "no_menu"
 elif [ "${1:-}" == "stop" ]; then stop_sb "no_menu"
+elif [ "${1:-}" == "links" ]; then show_links
 else menu
 fi
 SB_EOF
@@ -306,43 +387,7 @@ info "管理面板部署完毕。正在通过面板启动节点..."
 # ==========================================
 # 打印最终节点信息
 # ==========================================
-PUB_IP=${CUSTOM_IP:-$(curl -s https://api.ipify.org 2>/dev/null || echo "YOUR_IP")}
 echo -e "\n\033[1;32m🎉 Sing-box 部署与管理面板双剑合璧完成！\033[0m\n"
-
-if $ENABLE_SS; then
-    echo "=== Shadowsocks (SS) 节点信息 ==="
-    ss_userinfo="${SS_METHOD}:${PSK_SS}"
-    ss_encoded=$(printf "%s" "$ss_userinfo" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
-    echo "ss://${ss_encoded}@${PUB_IP}:${PORT_SS}#SS${suffix}"
-    echo ""
-fi
-
-if $ENABLE_HY2; then
-    echo "=== Hysteria2 (HY2) 节点信息 ==="
-    hy2_encoded=$(printf "%s" "$PSK_HY2" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
-    echo "hy2://${hy2_encoded}@${PUB_IP}:${PORT_HY2}/?sni=www.bing.com&alpn=h3&insecure=1#HY2${suffix}"
-    echo ""
-fi
-
-if $ENABLE_TUIC; then
-    echo "=== TUIC 节点信息 ==="
-    tuic_encoded=$(printf "%s" "$PSK_TUIC" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
-    echo "tuic://${UUID_TUIC}:${tuic_encoded}@${PUB_IP}:${PORT_TUIC}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#TUIC${suffix}"
-    echo ""
-fi
-
-if $ENABLE_ANYTLS; then
-    echo "=== AnyTLS 节点链接 ==="
-    anytls_pass_encoded=$(printf "%s" "$ANYTLS_PSK" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
-    echo "anytls://${anytls_pass_encoded}@${PUB_IP}:${PORT_ANYTLS}/?security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#AnyTLS${suffix}"
-    echo ""
-fi
-
-if $ENABLE_REALITY; then
-    echo "=== VLESS Reality 节点链接 ==="
-    echo "vless://${UUID}@${PUB_IP}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#Reality${suffix}"
-    echo ""
-fi
-
+/usr/bin/sb links
 echo -e "\033[1;33m💡 重要提醒：请务必去路由器或群晖面板放行上述端口！\033[0m"
 echo -e "\033[1;36m🚀 以后随时在终端输入 sb 并回车，即可呼出控制面板进行管理！\033[0m\n"
